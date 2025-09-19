@@ -28,7 +28,7 @@ jobs:
           echo 'Workspace files:'
           ls -la
       - name: Install
-        run: npm ci --no-optional
+        run: npm install --no-optional --no-audit --no-fund
 
       - name: Build
         run: npm run build
