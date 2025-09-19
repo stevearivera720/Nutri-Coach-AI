@@ -17,8 +17,18 @@ jobs:
         with:
           node-version: '18'
 
+      - name: Cleanup potential bad lock/content
+        run: |
+          rm -rf node_modules || true
+          rm -f package-lock.json || true
+      - name: Diagnostics
+        run: |
+          node -v
+          npm -v
+          echo 'Workspace files:'
+          ls -la
       - name: Install
-        run: npm ci
+        run: npm ci --no-optional
 
       - name: Build
         run: npm run build
