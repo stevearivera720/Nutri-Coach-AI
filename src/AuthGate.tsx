@@ -9,6 +9,28 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true
     async function init() {
+      // Handle OAuth redirect fragments (access_token, refresh_token)
+      try {
+        const hash = window.location.hash || ''
+        if (hash.startsWith('#')) {
+          const params = new URLSearchParams(hash.slice(1))
+          const access_token = params.get('access_token')
+          const refresh_token = params.get('refresh_token')
+          if (access_token && refresh_token) {
+            // Set Supabase session from tokens
+            try {
+              await supabase.auth.setSession({ access_token, refresh_token })
+            } catch (e) {
+              console.warn('Failed to set session from redirect tokens', e)
+            }
+            // Remove tokens from URL without reloading
+            try { history.replaceState(null, document.title, window.location.pathname + window.location.search) } catch (e) { /* ignore */ }
+          }
+        }
+      } catch (e) {
+        console.warn('OAuth redirect handling failed', e)
+      }
+
       try {
         const { data } = await supabase.auth.getSession()
         if (!mounted) return
