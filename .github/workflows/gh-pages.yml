@@ -28,7 +28,14 @@ jobs:
           echo 'Workspace files:'
           ls -la
       - name: Install
-        run: npm install --no-optional --no-audit --no-fund
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "package-lock.json found, running: npm ci --no-optional --no-audit --no-fund"
+            npm ci --no-optional --no-audit --no-fund
+          else
+            echo "no package-lock.json, running: npm install --no-optional --no-audit --no-fund"
+            npm install --no-optional --no-audit --no-fund
+          fi
 
       - name: Build
         run: npm run build
