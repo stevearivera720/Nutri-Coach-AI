@@ -1,6 +1,12 @@
 export async function callOpenAI(prompt: string, profile: any, system?: string) {
   const provider = localStorage.getItem('provider') || 'openai'
 
+  if (provider === 'usda') {
+    // Use USDA FoodData Central to fetch nutrient data and classify
+    const { classifyWithUSDA } = await import('./usda')
+    return classifyWithUSDA(prompt)
+  }
+
   const messages = [
     { role: 'system', content: system || 'You are a nutrition assistant.' },
     { role: 'user', content: `Profile: ${JSON.stringify(profile)}\nQuestion: ${prompt}` }
@@ -82,6 +88,31 @@ export async function callOpenAI(prompt: string, profile: any, system?: string) 
   })
   if (!res.ok) {
     const text = await res.text()
+    // Try to parse JSON error to check for quota/billing issues
+    try {
+      const json = JSON.parse(text)
+      const err = json?.error
+      if (err && err.code === 'insufficient_quota') {
+        // Try server-side HF proxy if available (requires server running with HF_API_KEY)
+        try {
+          const hfRes = await fetch('/api/hf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) })
+          if (hfRes.ok) {
+            const j = await hfRes.json()
+            return j.text || JSON.stringify(j)
+          }
+        } catch (hfErr) {
+          // ignore and fallback
+        }
+        // Optional demo fallback if developer enabled it in localStorage
+        if (localStorage.getItem('demo_mode') === 'true') {
+          // Return a short canned demo response so the UI remains usable
+          return 'Demo mode: the configured OpenAI account has exceeded its quota. This is a demo response. To use the live assistant, check your OpenAI billing or paste your own API key in Settings.'
+        }
+        throw new Error('OpenAI quota exceeded (insufficient_quota). Please check your OpenAI plan/billing or paste a personal API key in Settings to continue.');
+      }
+    } catch (e) {
+      // fall through and throw raw text if it wasn't JSON or parsing failed
+    }
     throw new Error(text)
   }
   const data = await res.json()

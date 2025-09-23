@@ -10,6 +10,8 @@ export default function Settings() {
   const [autoContinue, setAutoContinue] = useState(localStorage.getItem('auto_continue') === 'true')
   const [autoContinueCount, setAutoContinueCount] = useState(Number(localStorage.getItem('auto_continue_count')) || 2)
   const [openaiModel, setOpenaiModel] = useState(localStorage.getItem('openai_model') || 'gpt-5-mini-3')
+  const [usdaKey, setUsdaKey] = useState(localStorage.getItem('usda_api_key') || '')
+  const [usdaValid, setUsdaValid] = useState<boolean | null>(null)
   const [enableStartupSuggestions, setEnableStartupSuggestions] = useState(localStorage.getItem('enable_startup_suggestions') !== 'false')
   const [startupTopics, setStartupTopics] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('startup_quick_topics') || 'null') || ['almond milk','salmon','banana smoothie','quinoa salad'] } catch { return ['almond milk','salmon','banana smoothie','quinoa salad'] }
@@ -23,11 +25,14 @@ export default function Settings() {
   function save() {
     if (provider === 'openai') {
       localStorage.setItem('openai_api_key', key.trim())
-    } else {
+    } else if (provider === 'azure') {
       // save Azure config
       localStorage.setItem('azure_endpoint', azureEndpoint.trim())
       localStorage.setItem('azure_key', azureKey.trim())
       localStorage.setItem('azure_deployment', azureDeployment.trim())
+    }
+    if (usdaKey.trim()) {
+      localStorage.setItem('usda_api_key', usdaKey.trim())
     }
     localStorage.setItem('provider', provider)
     localStorage.setItem('max_tokens', String(maxTokens))
@@ -37,6 +42,19 @@ export default function Settings() {
     localStorage.setItem('enable_startup_suggestions', enableStartupSuggestions ? 'true' : 'false')
     localStorage.setItem('startup_quick_topics', JSON.stringify(startupTopics))
     alert('Saved API key locally. The app will use it to call OpenAI.')
+  }
+
+  async function validateUSDA() {
+    setUsdaValid(null)
+    try {
+      const res = await fetch(`https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${encodeURIComponent(usdaKey)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ generalSearchInput: 'apple', pageSize: 1 }) })
+      if (!res.ok) { setUsdaValid(false); return }
+      const j = await res.json()
+      if (j && j.foods && j.foods.length > 0) setUsdaValid(true)
+      else setUsdaValid(false)
+    } catch (err) {
+      setUsdaValid(false)
+    }
   }
 
   function clearKey() {
@@ -78,6 +96,17 @@ export default function Settings() {
           <div className="muted">If your endpoint is a full Responses API URL (contains <code>/responses</code>), paste the full URL into Endpoint and leave Deployment empty. Otherwise provide Endpoint (e.g. <code>https://&lt;resource-name&gt;.openai.azure.com</code>), Key, and the Deployment name (your model deployment).</div>
         </div>
       )}
+      <div style={{marginTop:12}}>
+        <h4>USDA (FoodData Central)</h4>
+        <div className="field">
+          <label>USDA API Key</label>
+          <input value={usdaKey} onChange={(e)=>{ setUsdaKey(e.target.value); setUsdaValid(null) }} placeholder="USDA API key" />
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button onClick={validateUSDA}>Validate USDA key</button>
+          {usdaValid === true ? <span style={{color:'green'}}>Valid</span> : usdaValid === false ? <span style={{color:'crimson'}}>Invalid</span> : null}
+        </div>
+      </div>
       <div className="field">
         <label>Max completion tokens</label>
         <input type="number" value={maxTokens} onChange={(e)=>setMaxTokens(Number(e.target.value))} min={50} max={130000} />

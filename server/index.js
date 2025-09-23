@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser')
 const app = express()
 app.use(cors())
 app.use(cookieParser())
+app.use(express.json())
 
 const RSS_URL = process.env.RSS_URL || 'https://www.theguardian.com/food/rss'
 
@@ -44,6 +45,38 @@ app.get('/daily-tip', async (req, res) => {
   } catch (err) {
     console.error(err)
     res.json({ tip: null })
+  }
+})
+
+// Hugging Face inference proxy (demo fallback)
+app.post('/api/hf', async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '')
+    if (!prompt) return res.status(400).json({ error: 'missing prompt' })
+    const HF_KEY = process.env.HF_API_KEY
+    const HF_MODEL = process.env.HF_MODEL || 'google/flan-t5-small'
+    if (!HF_KEY) return res.status(500).json({ error: 'HF_API_KEY not configured on server' })
+
+    const r = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${HF_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ inputs: prompt })
+    })
+    const j = await r.json()
+    if (!r.ok) return res.status(502).json({ error: j })
+
+    let out = ''
+    if (Array.isArray(j) && j[0]?.generated_text) out = j[0].generated_text
+    else if (j.generated_text) out = j.generated_text
+    else out = JSON.stringify(j)
+
+    return res.json({ text: out })
+  } catch (err) {
+    console.error('HF proxy error', err)
+    return res.status(500).json({ error: String(err) })
   }
 })
 
