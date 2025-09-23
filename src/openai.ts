@@ -73,9 +73,51 @@ export async function callOpenAI(prompt: string, profile: any, system?: string) 
     return content || JSON.stringify(data)
   }
 
+  // Hugging Face Inference (user-provided key + model)
+  if (provider === 'hf') {
+    const hfKey = localStorage.getItem('hf_api_key')
+    const hfModel = localStorage.getItem('hf_model')
+    if (!hfKey || !hfModel) throw new Error('Hugging Face API key or model not set. Please set them in Settings.')
+    // Try to call the HF Inference API for text generation
+    const url = `https://api-inference.huggingface.co/models/${encodeURIComponent(hfModel)}`
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hfKey}` }, body: JSON.stringify({ inputs: prompt, parameters: { max_new_tokens: Number(localStorage.getItem('max_tokens') || 150) } }) })
+      const txt = await res.text()
+      if (!res.ok) {
+        // try parse json error
+        try { const j = JSON.parse(txt); throw new Error(JSON.stringify(j)) } catch { throw new Error(txt) }
+      }
+      // HF often returns JSON or plain text; attempt to parse
+      try {
+        const j = JSON.parse(txt)
+        // For text-generation models, HF may return [{generated_text: '...'}]
+        if (Array.isArray(j) && j[0]?.generated_text) return j[0].generated_text
+        if (j?.generated_text) return j.generated_text
+        if (j?.text) return j.text
+        return JSON.stringify(j)
+      } catch (e) {
+        return txt
+      }
+    } catch (e) {
+      throw e
+    }
+  }
+
   // Default: OpenAI API
   const apiKey = localStorage.getItem('openai_api_key')
-  if (!apiKey) throw new Error('OpenAI API key not set. Please set it in settings.')
+  if (!apiKey) {
+    // Graceful fallback: if USDA key exists, use USDA provider as a fallback
+    const usdaKey = localStorage.getItem('usda_api_key')
+    if (usdaKey) {
+      const { classifyWithUSDA } = await import('./usda')
+      return classifyWithUSDA(prompt)
+    }
+    // Optional demo fallback
+    if (localStorage.getItem('demo_mode') === 'true') {
+      return 'Demo mode: OpenAI API key not set. This is a demo response. Paste your OpenAI key in Settings for live results.'
+    }
+    throw new Error('OpenAI API key not set. Please set it in Settings (openai_api_key) or paste a USDA API key in Settings to use the USDA provider.')
+  }
   const configured = Number(localStorage.getItem('max_tokens')) || 300
   const model = localStorage.getItem('openai_model') || 'gpt-4o-mini'
   const res = await fetch('https://api.openai.com/v1/chat/completions', {

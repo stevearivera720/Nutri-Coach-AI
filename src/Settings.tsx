@@ -12,6 +12,9 @@ export default function Settings() {
   const [openaiModel, setOpenaiModel] = useState(localStorage.getItem('openai_model') || 'gpt-5-mini-3')
   const [usdaKey, setUsdaKey] = useState(localStorage.getItem('usda_api_key') || '')
   const [usdaValid, setUsdaValid] = useState<boolean | null>(null)
+  const [hfKey, setHfKey] = useState(localStorage.getItem('hf_api_key') || '')
+  const [hfModel, setHfModel] = useState(localStorage.getItem('hf_model') || '')
+  const [hfValid, setHfValid] = useState<boolean | null>(null)
   const [enableStartupSuggestions, setEnableStartupSuggestions] = useState(localStorage.getItem('enable_startup_suggestions') !== 'false')
   const [startupTopics, setStartupTopics] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('startup_quick_topics') || 'null') || ['almond milk','salmon','banana smoothie','quinoa salad'] } catch { return ['almond milk','salmon','banana smoothie','quinoa salad'] }
@@ -34,6 +37,12 @@ export default function Settings() {
     if (usdaKey.trim()) {
       localStorage.setItem('usda_api_key', usdaKey.trim())
     }
+    if (hfKey.trim()) {
+      localStorage.setItem('hf_api_key', hfKey.trim())
+    }
+    if (hfModel.trim()) {
+      localStorage.setItem('hf_model', hfModel.trim())
+    }
     localStorage.setItem('provider', provider)
     localStorage.setItem('max_tokens', String(maxTokens))
     localStorage.setItem('openai_model', openaiModel)
@@ -54,6 +63,19 @@ export default function Settings() {
       else setUsdaValid(false)
     } catch (err) {
       setUsdaValid(false)
+    }
+  }
+
+  async function validateHF() {
+    setHfValid(null)
+    try {
+      if (!hfKey || !hfModel) { setHfValid(false); return }
+      const url = `https://api-inference.huggingface.co/models/${encodeURIComponent(hfModel)}`
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hfKey}` }, body: JSON.stringify({ inputs: 'Hello', parameters: { max_new_tokens: 1 } }) })
+      if (!res.ok) { setHfValid(false); return }
+      setHfValid(true)
+    } catch (err) {
+      setHfValid(false)
     }
   }
 
@@ -105,6 +127,21 @@ export default function Settings() {
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
           <button onClick={validateUSDA}>Validate USDA key</button>
           {usdaValid === true ? <span style={{color:'green'}}>Valid</span> : usdaValid === false ? <span style={{color:'crimson'}}>Invalid</span> : null}
+        </div>
+      </div>
+      <div style={{marginTop:12}}>
+        <h4>Hugging Face Inference</h4>
+        <div className="field">
+          <label>HF API Key</label>
+          <input value={hfKey} onChange={(e)=>{ setHfKey(e.target.value); setHfValid(null) }} placeholder="HF API key (starts with hf_...)" />
+        </div>
+        <div className="field">
+          <label>HF Model</label>
+          <input value={hfModel} onChange={(e)=>{ setHfModel(e.target.value); setHfValid(null) }} placeholder="model name (e.g. google/flan-t5-large)" />
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button onClick={validateHF}>Validate HF key & model</button>
+          {hfValid === true ? <span style={{color:'green'}}>Valid</span> : hfValid === false ? <span style={{color:'crimson'}}>Invalid</span> : null}
         </div>
       </div>
       <div className="field">
