@@ -17,20 +17,31 @@ export async function callOpenAI(prompt: string, profile: any, system?: string) 
     const endpoint = localStorage.getItem('azure_endpoint')
     const key = localStorage.getItem('azure_key')
     const deployment = localStorage.getItem('azure_deployment')
+    const chatApiVersion = localStorage.getItem('azure_chat_api_version') || '2023-10-01-preview'
+    const responsesApiVersion = localStorage.getItem('azure_responses_api_version') || '2025-04-01-preview'
     if (!endpoint || !key) throw new Error('Azure OpenAI endpoint or key not set. Please set them in Settings.')
 
     // If user pasted a full Responses API URL (contains /responses), use it directly
     if (endpoint.includes('/responses')) {
-      const url = endpoint + (endpoint.includes('?') ? '&' : '?') + 'api-version=2025-04-01-preview'
+      // Ensure we don't end with a stray '?'
+      const base = endpoint.replace(/[?&]$/, '')
+      // Only append api-version if not present
+      const hasApiVersion = /[?&]api-version=/.test(base)
+      const url = hasApiVersion ? base : base + (base.includes('?') ? '&' : '?') + 'api-version=' + encodeURIComponent(responsesApiVersion)
       console.log('[openai] Azure Responses request ->', url)
+      // For Azure Responses, we must provide a model (deployment name)
+      const model = (localStorage.getItem('azure_deployment') || localStorage.getItem('openai_model') || '').trim()
+      if (!model) {
+        throw new Error('Azure Responses requires a model (deployment) name. Please set "Deployment / Model name" in Settings (e.g., your Azure deployment "gpt-5-mini").')
+      }
       const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'api-key': key
         },
-  // Use Responses API format and set max_completion_tokens for Azure models that expect it
-  body: JSON.stringify({ input: `${JSON.stringify(profile)}\nQuestion: ${prompt}`, parameters: { max_completion_tokens: configured } })
+        // Use Responses API with explicit model and max_output_tokens
+        body: JSON.stringify({ model, input: `${JSON.stringify(profile)}\nQuestion: ${prompt}`, max_output_tokens: configured })
       })
       const text = await res.text()
       if (!res.ok) {
@@ -44,8 +55,19 @@ export async function callOpenAI(prompt: string, profile: any, system?: string) 
     }
 
     // Otherwise call chat completions on deployments
-    if (!deployment) throw new Error('Azure deployment not set. Please set it in Settings.')
-    const url = endpoint.replace(/\/$/, '') + `/openai/deployments/${deployment}/chat/completions?api-version=2023-10-01-preview`
+    const effectiveDeployment = (deployment && deployment.trim()) || (localStorage.getItem('openai_model') || '').trim()
+    if (!effectiveDeployment) throw new Error('Azure deployment not set. Please set it in Settings (or select a Model which will be used as the deployment name).')
+    // Normalize endpoint: use origin only for Chat (avoid duplicating '/openai')
+    let baseUrl: string
+    try {
+      const u = new URL(endpoint)
+      baseUrl = u.origin
+    } catch {
+      baseUrl = endpoint.replace(/\/$/, '')
+      // If user accidentally included '/openai' in endpoint, strip it
+      baseUrl = baseUrl.replace(/\/?openai\/?$/i, '')
+    }
+    const url = baseUrl.replace(/\/$/, '') + `/openai/deployments/${encodeURIComponent(effectiveDeployment)}/chat/completions?api-version=${encodeURIComponent(chatApiVersion)}`
     console.log('[openai] Azure chat request ->', url)
     const res = await fetch(url, {
       method: 'POST',
@@ -106,17 +128,11 @@ export async function callOpenAI(prompt: string, profile: any, system?: string) 
   // Default: OpenAI API
   const apiKey = localStorage.getItem('openai_api_key')
   if (!apiKey) {
-    // Graceful fallback: if USDA key exists, use USDA provider as a fallback
-    const usdaKey = localStorage.getItem('usda_api_key')
-    if (usdaKey) {
-      const { classifyWithUSDA } = await import('./usda')
-      return classifyWithUSDA(prompt)
-    }
-    // Optional demo fallback
+    // Optional demo fallback only
     if (localStorage.getItem('demo_mode') === 'true') {
-      return 'Demo mode: OpenAI API key not set. This is a demo response. Paste your OpenAI key in Settings for live results.'
+      return 'Demo mode: OpenAI/Azure key not set. This is a demo response. Paste your key in Settings for live results.'
     }
-    throw new Error('OpenAI API key not set. Please set it in Settings (openai_api_key) or paste a USDA API key in Settings to use the USDA provider.')
+    throw new Error('API key not set. Please set your OpenAI or Azure key in Settings to use the assistant.')
   }
   const configured = Number(localStorage.getItem('max_tokens')) || 300
   const model = localStorage.getItem('openai_model') || 'gpt-4o-mini'

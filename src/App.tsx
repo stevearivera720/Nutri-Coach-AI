@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react'
-import getFruitIcon from './icons'
 import useStore from './store'
 import { getProfile, saveProfile } from './storage'
 import { callOpenAI } from './openai'
 import Settings from './Settings'
+import { getExerciseOfDay, EXERCISES } from './exercises'
 
 function Badge({ color, children }: { color: string; children: React.ReactNode }) {
   return <span className={`badge ${color}`}>{children}</span>
@@ -22,8 +22,12 @@ export default function App() {
   const autoContinueRef = useRef<string | null>(null)
   const [heroInfo, setHeroInfo] = useState<any>(null)
   const [dailyTip, setDailyTip] = useState<string | null>(null)
+  const [healthQuote, setHealthQuote] = useState<string | null>(null)
+  const [exercise, setExercise] = useState<any>(null)
   const [chipActive, setChipActive] = useState<string | null>(null)
   const chatRef = useRef<HTMLDivElement | null>(null)
+  const [heroCollapsed, setHeroCollapsed] = useState(false)
+  const userToggledRef = useRef(false)
 
   function lastAssistantMessage() {
     for (let i = messages.length - 1; i >= 0; --i) {
@@ -135,6 +139,75 @@ export default function App() {
     }catch(err){console.warn(err)}
   }
 
+  // Fetch a positive daily health / wellness quote (with graceful fallbacks)
+  async function loadDailyQuote(){
+    try {
+      // Try a lightweight public quote API (no key) first
+      const controllers: AbortController[] = []
+      const timeout = (ms: number) => new Promise((_r, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+      async function fetchWithTimeout(url: string, ms = 3500) {
+        const ac = new AbortController(); controllers.push(ac)
+        return Promise.race([
+          fetch(url, { signal: ac.signal }),
+          timeout(ms)
+        ]) as Promise<Response>
+      }
+      let quote: string | null = null
+      try {
+        // ZenQuotes (returns array)
+        const r1 = await fetchWithTimeout('https://zenquotes.io/api/today')
+        if (r1.ok) {
+          const j = await r1.json(); if (Array.isArray(j) && j[0]?.q) quote = `${j[0].q} — ${j[0].a}`
+        }
+      } catch {}
+      if (!quote) {
+        try {
+          const r2 = await fetchWithTimeout('https://api.quotable.io/random?tags=health|inspirational')
+          if (r2.ok) { const j = await r2.json(); if (j?.content) quote = `${j.content} — ${j.author}` }
+        } catch {}
+      }
+      if (!quote) {
+        // Local fallback rotation
+        const fallbacks = [
+          'Small, consistent choices compound into lifelong health.',
+          'Hydration, movement, and sleep: the quiet trio behind vibrant energy.',
+          'Nourish your body today so it can carry you tomorrow.',
+          'Progress over perfection—one wholesome meal nudges the arc forward.'
+        ]
+        const idx = new Date().getDate() % fallbacks.length
+        quote = fallbacks[idx]
+      }
+      setHealthQuote(quote)
+      controllers.forEach(c=>c.abort())
+    } catch (e) {
+      // Guarantee a local fallback so UI always shows something
+      const fallback = 'Healthy habits build powerful results over time.'
+      setHealthQuote(fallback)
+    }
+  }
+
+  function loadExercise(){
+    try {
+      const ex = getExerciseOfDay(new Date())
+      setExercise(ex)
+    } catch(e){
+      setExercise(null)
+    }
+  }
+
+  function shuffleExercise(){
+    try {
+      if (!EXERCISES.length) return
+      // pick a random different exercise id
+      const currentId = exercise?.id
+      const pool = EXERCISES.filter(e=>e.id!==currentId)
+      const next = pool[Math.floor(Math.random()*pool.length)] || EXERCISES[0]
+      setExercise(next)
+    } catch(err){
+      console.warn('Shuffle failed', err)
+    }
+  }
+
   // Listen for Settings 'Back to home' event
   useEffect(()=>{
     const handler = ()=> setShowSettings(false)
@@ -146,6 +219,8 @@ export default function App() {
   useEffect(()=>{
     void handleGetStarted()
     void loadDailyTip()
+    void loadDailyQuote()
+    loadExercise()
   }, [])
 
   useEffect(() => {
@@ -191,7 +266,23 @@ export default function App() {
     setIsLoading(true)
     const userMessage = { from: 'user', text: prompt }
     setMessages((m) => [...m, userMessage])
-    const system = `You are a nutrition assistant. Use this user's health profile: ${JSON.stringify(profile)}. Classify the item as Beneficial, Neutral, or Avoid and give a short explanation.`
+    // Build a safety-aware system prompt that treats custom items as allergies/sensitivities
+    const customAsAllergies = Array.from(new Set([...(profile?.allergies || []), ...(profile?.custom || [])]))
+    const lowerTerms = customAsAllergies.map((s: string) => (s || '').toLowerCase()).filter(Boolean)
+    const promptLower = (prompt || '').toLowerCase()
+    const matched = lowerTerms.filter((t: string) => t && promptLower.includes(t))
+    const systemParts: string[] = []
+    systemParts.push(
+      `You are a nutrition assistant. Use this user's health profile: ${JSON.stringify(profile)}.`
+    )
+    systemParts.push(
+      'Treat any items listed in profile.custom as allergies/sensitivities (equivalent to allergies). If a food or recipe contains any item from allergies or custom, classify as Avoid and include a clear safety warning. Prefer safety and suggest suitable alternatives when relevant.'
+    )
+    if (matched.length) {
+      systemParts.push(`Alert: The user prompt mentions these allergy/sensitivity terms from the profile: ${matched.join(', ')}. Be strict: classify as Avoid and explain the risk. Offer safe alternatives.`)
+    }
+    systemParts.push('After analysis, classify the item as one of: Beneficial, Neutral, or Avoid, and provide a concise explanation.')
+    const system = systemParts.join(' ')
     setMessages((m) => [...m, { from: 'assistant', text: 'Analyzing...' }])
     try {
       const res = await callOpenAI(prompt, profile, system)
@@ -266,7 +357,8 @@ export default function App() {
       }
       // basic filtering based on user profile: remove recipes whose title mentions allergies
       try {
-        const allergies: string[] = (profileArg?.allergies || []).map((s: string) => s.toLowerCase())
+  // Treat custom issues as allergies for filtering purposes
+  const allergies: string[] = ([...(profileArg?.allergies || []), ...(profileArg?.custom || [])] as string[]).map((s: string) => (s || '').toLowerCase())
         const prefers = ((profileArg?.custom || []) as string[]).map(s=>s.toLowerCase()).concat(((profileArg?.conditions || []) as string[]).map(s=>s.toLowerCase()))
         let filtered = items.filter(it => {
           const t = (it.title || '').toLowerCase()
@@ -338,16 +430,30 @@ export default function App() {
     }
   }, [messages])
 
+  // Auto collapse hero on small viewports unless user toggled manually
+  useEffect(() => {
+    function adjust(){
+      if (userToggledRef.current) return
+      const h = window.innerHeight
+      if (h < 760 && !heroCollapsed) setHeroCollapsed(true)
+      else if (h > 820 && heroCollapsed) setHeroCollapsed(false)
+    }
+    adjust()
+    window.addEventListener('resize', adjust)
+    return () => window.removeEventListener('resize', adjust)
+  }, [heroCollapsed])
+
   return (
-    <div className="app">
+  <div className={`app${heroCollapsed ? ' hero-collapsed' : ''}`} style={{display:'flex',flexDirection:'column',height:'100dvh',overflow:'hidden'}}>
       <header>
         <h1>NutriCoach AI</h1>
+        <button onClick={()=>{ userToggledRef.current = true; setHeroCollapsed(c=>!c)}} style={{marginLeft:8}} aria-pressed={heroCollapsed}>{heroCollapsed ? 'Show intro' : 'Hide intro'}</button>
         <div style={{marginLeft:'auto'}}>
           <button onClick={()=>setShowSettings(s=>!s)} aria-pressed={showSettings}>Settings</button>
         </div>
       </header>
 
-      <div className="hero-split">
+      {!heroCollapsed && <div className="hero-split">
         <div className="hero-left">
           <div className="logo">NutriCoach</div>
           <h2 className="hero-title">Eat fresh<br/>stay healthy</h2>
@@ -370,13 +476,40 @@ export default function App() {
                 <h3 style={{marginTop:0}}>{heroInfo.title}</h3>
                 <p className="muted">{heroInfo.extract}</p>
                 <p><a href={heroInfo.content_urls?.desktop?.page || 'https://en.wikipedia.org/wiki/Healthy_diet'} target="_blank" rel="noreferrer">Read more on Wikipedia</a></p>
-                <div style={{marginTop:12, display:'flex', gap:10, alignItems:'center'}} aria-hidden>
-                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                    <div style={{width:56,height:56,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(255,255,255,0.06)',borderRadius:12}}>{getFruitIcon('apple',36)}</div>
-                    <div style={{width:56,height:56,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(255,255,255,0.06)',borderRadius:12}}>{getFruitIcon('avocado',36)}</div>
-                    <div style={{width:56,height:56,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(255,255,255,0.06)',borderRadius:12}}>{getFruitIcon('banana',36)}</div>
+                <div style={{marginTop:12,color:'rgba(255,255,255,0.8)'}} className="muted" aria-hidden>Healthy living guidance</div>
+                <div style={{marginTop:16}}>
+                  <h4 style={{margin:'0 0 6px',fontSize:14,letterSpacing:0.5, textTransform:'uppercase',color:'rgba(0,0,0,0.65)'}}>Daily health quote</h4>
+                  <blockquote style={{margin:0,padding:'12px 14px',background:'rgba(255,255,255,0.10)',borderLeft:'4px solid rgba(255,255,255,0.55)',borderRadius:8,fontSize:14,lineHeight:1.4,color:'rgba(0,0,0,0.8)',fontStyle:'italic'}}>
+                    <span style={{display:'block',opacity:healthQuote?1:0.6}}>{healthQuote || 'Loading inspiring thought...'}</span>
+                  </blockquote>
+                </div>
+                <div style={{marginTop:18}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+                    <h4 style={{margin:'0 0 6px',fontSize:14,letterSpacing:0.5,textTransform:'uppercase',color:'rgba(0,0,0,0.65)'}}>Exercise of the day</h4>
+                    <button type="button" onClick={shuffleExercise} style={{background:'rgba(255,255,255,0.3)',border:'0',padding:'4px 8px',borderRadius:6,cursor:'pointer',fontSize:11,fontWeight:600}}>Next</button>
                   </div>
-                  <div style={{color:'rgba(255,255,255,0.8)'}} className="muted">Healthy living visuals</div>
+                  {exercise ? (
+                    <div style={{display:'flex',gap:12,alignItems:'center',background:'rgba(255,255,255,0.14)',padding:'10px 12px',borderRadius:10}}>
+                      {exercise.gifUrl ? (
+                        <img src={exercise.gifUrl} alt={exercise.name} style={{width:90,height:60,objectFit:'cover',borderRadius:8,flex:'0 0 auto',background:'rgba(255,255,255,0.25)'}} />
+                      ) : (
+                        <div style={{width:90,height:60,flex:'0 0 auto',display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(255,255,255,0.25)',borderRadius:8}} dangerouslySetInnerHTML={{__html: exercise.svg}} />
+                      )}
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:600,fontSize:14}}>{exercise.name}</div>
+                        <div style={{fontSize:12,lineHeight:1.3,opacity:0.85}}>{exercise.description}</div>
+                        <div style={{fontSize:11,marginTop:4,opacity:0.75}}>{exercise.tips}</div>
+                        <div style={{fontSize:11,marginTop:4,fontWeight:600}}>{exercise.duration}</div>
+                        {exercise.attribution ? (
+                          <div style={{fontSize:10,marginTop:4,opacity:0.6}}>
+                            {exercise.attribution}{exercise.license?` (${exercise.license})`:''}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{fontSize:12,opacity:0.6}}>Loading exercise...</div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -387,15 +520,15 @@ export default function App() {
             )}
           </div>
         </div>
-      </div>
-      <main>
+      </div>}
+  <main style={{flex:1,display:'grid',gridTemplateColumns:'320px 1fr',gap:18,overflow:'hidden',marginTop:18}}>
         <section className="profile">
           <h2>Health profile</h2>
           <ProfileEditor profile={profile} setProfile={setProfile} />
         </section>
 
-        <section className="chat">
-          <div className="chat-window" role="log" aria-live="polite" ref={chatRef}>
+        <section className="chat" style={{display:'flex',flexDirection:'column',overflow:'hidden'}}>
+          <div className={`chat-window${messages.length===0 ? ' empty' : ''}`} role="log" aria-live="polite" ref={chatRef}>
             {messages.length === 0 ? (
               <div className="startup-panel">
                 <h3>Welcome to NutriCoach AI</h3>
@@ -403,10 +536,7 @@ export default function App() {
                 {dailyTip ? <div className="daily-tip" style={{marginTop:8}}><strong>Daily tip:</strong> {dailyTip}</div> : null}
                 <div className="chips" style={{marginTop:12}}>
                   {((localStorage.getItem('enable_startup_suggestions') !== 'false') ? (JSON.parse(localStorage.getItem('startup_quick_topics') || 'null') || ['almond milk','salmon','banana smoothie','quinoa salad']) : []).map((q: string) => (
-                    <button key={q} className={`chip ${chipActive===q?'active':''}`} onClick={() => { setQuery(q); setChipActive(q); setTimeout(()=>setChipActive(null),800); handleAnalyze(q); }}>
-                      <span style={{width:20,height:20,marginRight:8,display:'inline-flex',alignItems:'center'}}>{getFruitIcon(q,20)}</span>
-                      {q}
-                    </button>
+                    <button key={q} className={`chip ${chipActive===q?'active':''}`} onClick={() => { setQuery(q); setChipActive(q); setTimeout(()=>setChipActive(null),800); handleAnalyze(q); }}>{q}</button>
                   ))}
                 </div>
                 <div style={{marginTop:12}}>
@@ -425,8 +555,7 @@ export default function App() {
                         <div style={{fontWeight:700,marginBottom:8}}>Recipe suggestions</div>
                         <ol>
                           {m.recipes.map((r: any, idx: number) => (
-                            <li key={idx} style={{display:'flex',alignItems:'center',gap:8}}>
-                              <span style={{width:36,height:36,display:'inline-flex',alignItems:'center',justifyContent:'center',background:'#fff8',borderRadius:8}}>{getFruitIcon(r.title || 'fruit', 28)}</span>
+                            <li key={idx} style={{marginBottom:6}}>
                               <a href={r.href} target="_blank" rel="noreferrer">{r.title || r.href}</a>
                             </li>
                           ))}
@@ -502,6 +631,12 @@ function ProfileEditor({ profile, setProfile }: any) {
     }
   }
 
+  function removeCustom(index: number) {
+    const next = { ...local, custom: local.custom.filter((_: string, i: number) => i !== index) }
+    setLocal(next)
+    setProfile(next)
+  }
+
   return (
     <div>
       <div className="field">
@@ -521,7 +656,12 @@ function ProfileEditor({ profile, setProfile }: any) {
       <div className="field">
         <label>Custom health issues</label>
         <div className="custom-list">
-          {local.custom.map((c: string, i: number) => <div key={i} className="custom-item">{c}</div>)}
+          {local.custom.map((c: string, i: number) => (
+            <div key={i} className="custom-item" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+              <span>{c}</span>
+              <button onClick={() => removeCustom(i)} style={{background:'transparent',border:'1px solid rgba(0,0,0,0.08)',borderRadius:8,cursor:'pointer',padding:'4px 8px'}}>Remove</button>
+            </div>
+          ))}
         </div>
         <div className="custom-add">
           <input placeholder="Type a custom issue" value={customText} onChange={(e) => setCustomText(e.target.value)} />

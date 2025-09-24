@@ -8,11 +8,26 @@ import AuthGate from './AuthGate'
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     {
-      // short-term: default to USDA provider when no provider is configured to avoid OpenAI quota issues
-      (() => { if (!localStorage.getItem('provider')) localStorage.setItem('provider','usda'); return null })()
+      // default to Azure provider when no provider is configured
+      (() => { if (!localStorage.getItem('provider')) localStorage.setItem('provider','azure'); return null })()
     }
-    <AuthGate>
-      <App />
-    </AuthGate>
+    {
+      // Allow skipping the GitHub/Supabase auth gate in environments where
+      // the auth redirect is inconvenient (for example GitHub Pages). The
+      // skip can be enabled manually by setting localStorage.setItem('skip_auth','true')
+      // or will be automatically enabled when the app is hosted on github.io.
+      (() => {
+        const skipFlag = localStorage.getItem('skip_auth') === 'true'
+        const runningOnGitHubPages = typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')
+        if (skipFlag || runningOnGitHubPages) {
+          return <App />
+        }
+        return (
+          <AuthGate>
+            <App />
+          </AuthGate>
+        )
+      })()
+    }
   </React.StrictMode>
 )

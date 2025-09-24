@@ -2,14 +2,16 @@ import React, { useState, useEffect } from 'react'
 
 export default function Settings() {
   const [key, setKey] = useState(localStorage.getItem('openai_api_key') || '')
-  const [provider, setProvider] = useState(localStorage.getItem('provider') || 'openai')
+  const [provider, setProvider] = useState(localStorage.getItem('provider') || 'azure')
   const [azureEndpoint, setAzureEndpoint] = useState(localStorage.getItem('azure_endpoint') || '')
   const [azureKey, setAzureKey] = useState(localStorage.getItem('azure_key') || '')
   const [azureDeployment, setAzureDeployment] = useState(localStorage.getItem('azure_deployment') || '')
+  const [azureChatApiVersion, setAzureChatApiVersion] = useState(localStorage.getItem('azure_chat_api_version') || '2023-10-01-preview')
+  const [azureResponsesApiVersion, setAzureResponsesApiVersion] = useState(localStorage.getItem('azure_responses_api_version') || '2025-04-01-preview')
   const [maxTokens, setMaxTokens] = useState(Number(localStorage.getItem('max_tokens')) || 32768)
   const [autoContinue, setAutoContinue] = useState(localStorage.getItem('auto_continue') === 'true')
   const [autoContinueCount, setAutoContinueCount] = useState(Number(localStorage.getItem('auto_continue_count')) || 2)
-  const [openaiModel, setOpenaiModel] = useState(localStorage.getItem('openai_model') || 'gpt-5-mini-3')
+  const [openaiModel, setOpenaiModel] = useState(localStorage.getItem('openai_model') || 'gpt-5-mini')
   const [usdaKey, setUsdaKey] = useState(localStorage.getItem('usda_api_key') || '')
   const [usdaValid, setUsdaValid] = useState<boolean | null>(null)
   const [hfKey, setHfKey] = useState(localStorage.getItem('hf_api_key') || '')
@@ -25,6 +27,35 @@ export default function Settings() {
     console.log('Settings component mounted, current key length:', (key || '').length)
   }, [])
 
+  // Auto-save on changes to avoid losing values on refresh
+  useEffect(() => {
+    try {
+      localStorage.setItem('provider', provider)
+      localStorage.setItem('max_tokens', String(maxTokens))
+      localStorage.setItem('openai_model', openaiModel)
+      localStorage.setItem('auto_continue', autoContinue ? 'true' : 'false')
+      localStorage.setItem('auto_continue_count', String(autoContinueCount))
+      localStorage.setItem('enable_startup_suggestions', enableStartupSuggestions ? 'true' : 'false')
+      localStorage.setItem('startup_quick_topics', JSON.stringify(startupTopics))
+      if (provider === 'openai') {
+        if (key.trim()) localStorage.setItem('openai_api_key', key.trim())
+      } else if (provider === 'azure') {
+        if (azureEndpoint.trim()) localStorage.setItem('azure_endpoint', azureEndpoint.trim())
+        if (azureKey.trim()) localStorage.setItem('azure_key', azureKey.trim())
+        if (azureDeployment.trim()) localStorage.setItem('azure_deployment', azureDeployment.trim())
+        if (azureChatApiVersion.trim()) localStorage.setItem('azure_chat_api_version', azureChatApiVersion.trim())
+        if (azureResponsesApiVersion.trim()) localStorage.setItem('azure_responses_api_version', azureResponsesApiVersion.trim())
+        // If deployment empty but model set, mirror it
+        if (!azureDeployment.trim() && openaiModel.trim()) localStorage.setItem('azure_deployment', openaiModel.trim())
+      }
+      if (usdaKey.trim()) localStorage.setItem('usda_api_key', usdaKey.trim())
+      if (hfKey.trim()) localStorage.setItem('hf_api_key', hfKey.trim())
+      if (hfModel.trim()) localStorage.setItem('hf_model', hfModel.trim())
+    } catch (e) {
+      // ignore storage failures (e.g., quota)
+    }
+  }, [provider, maxTokens, openaiModel, autoContinue, autoContinueCount, enableStartupSuggestions, startupTopics, key, azureEndpoint, azureKey, azureDeployment, azureChatApiVersion, azureResponsesApiVersion, usdaKey, hfKey, hfModel])
+
   function save() {
     if (provider === 'openai') {
       localStorage.setItem('openai_api_key', key.trim())
@@ -33,6 +64,12 @@ export default function Settings() {
       localStorage.setItem('azure_endpoint', azureEndpoint.trim())
       localStorage.setItem('azure_key', azureKey.trim())
       localStorage.setItem('azure_deployment', azureDeployment.trim())
+      localStorage.setItem('azure_chat_api_version', azureChatApiVersion.trim())
+      localStorage.setItem('azure_responses_api_version', azureResponsesApiVersion.trim())
+      // If user didn't fill the deployment field, fall back to Model as deployment
+      if (!azureDeployment.trim() && openaiModel.trim()) {
+        localStorage.setItem('azure_deployment', openaiModel.trim())
+      }
     }
     if (usdaKey.trim()) {
       localStorage.setItem('usda_api_key', usdaKey.trim())
@@ -50,7 +87,7 @@ export default function Settings() {
     localStorage.setItem('auto_continue_count', String(autoContinueCount))
     localStorage.setItem('enable_startup_suggestions', enableStartupSuggestions ? 'true' : 'false')
     localStorage.setItem('startup_quick_topics', JSON.stringify(startupTopics))
-    alert('Saved API key locally. The app will use it to call OpenAI.')
+    alert('Saved settings locally.')
   }
 
   async function validateUSDA() {
@@ -108,6 +145,14 @@ export default function Settings() {
             <input value={azureEndpoint} onChange={(e)=>setAzureEndpoint(e.target.value)} placeholder="https://your-resource.openai.azure.com/..." />
           </div>
           <div className="field">
+            <label>Azure Chat API Version</label>
+            <input value={azureChatApiVersion} onChange={(e)=>setAzureChatApiVersion(e.target.value)} placeholder="2023-10-01-preview" />
+          </div>
+          <div className="field">
+            <label>Azure Responses API Version</label>
+            <input value={azureResponsesApiVersion} onChange={(e)=>setAzureResponsesApiVersion(e.target.value)} placeholder="2025-04-01-preview" />
+          </div>
+          <div className="field">
             <label>Azure API Key</label>
             <input value={azureKey} onChange={(e)=>setAzureKey(e.target.value)} placeholder="Azure key" />
           </div>
@@ -115,11 +160,11 @@ export default function Settings() {
             <label>Deployment / Model name</label>
             <input value={azureDeployment} onChange={(e)=>setAzureDeployment(e.target.value)} placeholder="deployment-name or model" />
           </div>
-          <div className="muted">If your endpoint is a full Responses API URL (contains <code>/responses</code>), paste the full URL into Endpoint and leave Deployment empty. Otherwise provide Endpoint (e.g. <code>https://&lt;resource-name&gt;.openai.azure.com</code>), Key, and the Deployment name (your model deployment).</div>
+          <div className="muted">If your endpoint is a Responses API URL (contains <code>/responses</code>), paste the base URL (with or without <code>?api-version=...</code>) and still set <b>Deployment / Model name</b> to your Azure deployment (e.g., <code>gpt-5-mini</code>). For Chat Completions, use the base endpoint (e.g. <code>https://&lt;resource-name&gt;.openai.azure.com</code>) and set the same deployment name.</div>
         </div>
       )}
       <div style={{marginTop:12}}>
-        <h4>USDA (FoodData Central)</h4>
+        <h4>USDA (FoodData Central) — Optional</h4>
         <div className="field">
           <label>USDA API Key</label>
           <input value={usdaKey} onChange={(e)=>{ setUsdaKey(e.target.value); setUsdaValid(null) }} placeholder="USDA API key" />
@@ -128,6 +173,7 @@ export default function Settings() {
           <button onClick={validateUSDA}>Validate USDA key</button>
           {usdaValid === true ? <span style={{color:'green'}}>Valid</span> : usdaValid === false ? <span style={{color:'crimson'}}>Invalid</span> : null}
         </div>
+        <div className="muted">This is not required for the AI assistant. Only fill this if you want to use USDA data lookups for nutrition details.</div>
       </div>
       <div style={{marginTop:12}}>
         <h4>Hugging Face Inference</h4>
@@ -151,12 +197,14 @@ export default function Settings() {
       </div>
       <div className="field">
         <label>Model (OpenAI / Azure deployment)</label>
-        <select value={openaiModel} onChange={(e)=>setOpenaiModel(e.target.value)}>
-          <option value="gpt-5-mini-3">gpt-5-mini-3</option>
-          <option value="gpt-4o-mini">gpt-4o-mini</option>
-          <option value="gpt-4o">gpt-4o</option>
-        </select>
-        <div className="muted">Select the model or deployment name. For Azure deployments, set the deployment name here and the Azure endpoint/key above.</div>
+        <input list="model-suggestions" value={openaiModel} onChange={(e)=>setOpenaiModel(e.target.value)} placeholder="e.g., gpt-5-mini" />
+        <datalist id="model-suggestions">
+          <option value="gpt-5-mini" />
+          <option value="gpt-5-mini-3" />
+          <option value="gpt-4o-mini" />
+          <option value="gpt-4o" />
+        </datalist>
+        <div className="muted">Type the exact model or Azure <b>deployment</b> name. For Azure, this value can double as the deployment name if the dedicated field is left blank.</div>
       </div>
       <div className="field">
         <label><input type="checkbox" checked={enableStartupSuggestions} onChange={(e)=>setEnableStartupSuggestions(e.target.checked)} /> Enable startup suggestions</label>
@@ -184,7 +232,7 @@ export default function Settings() {
         </div>
       </div>
       <div style={{display:'flex',gap:8}}>
-        <button onClick={save}>Save key</button>
+  <button onClick={save}>Save settings</button>
         <button onClick={clearKey} style={{background:'#eee'}}>Clear</button>
         <button onClick={()=>{ window.dispatchEvent(new CustomEvent('nutri:closeSettings')) }} style={{background:'transparent',border:'1px solid rgba(0,0,0,0.06)'}}>Back to home</button>
       </div>
